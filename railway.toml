@@ -1,0 +1,11 @@
+[build]
+builder = "DOCKERFILE"
+
+[deploy]
+startCommand = "python main.py"
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 5
+
+# Постійне сховище для SQLite бази (щоб не втрачати побачені події при рестарті)
+[[volumes]]
+mountPath = "/data"
