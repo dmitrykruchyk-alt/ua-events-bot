@@ -19,6 +19,7 @@ from scrapers.ticketmaster_api import scrape_ticketmaster
 from utils.storage import Storage
 from utils.formatter import format_event_message
 from utils.ru_filter import is_russian_content
+from utils.ua_allowlist import is_ukrainian_event
 
 logging.basicConfig(
     level=logging.INFO,
