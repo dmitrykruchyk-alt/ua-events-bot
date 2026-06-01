@@ -1,42 +1,52 @@
 """
 Форматер повідомлень для Telegram.
-Генерує красиве HTML-повідомлення з деталями події.
 """
 
-# Прапори країн
 COUNTRY_FLAGS = {
-    "germany":          "🇩🇪", "deutschland": "🇩🇪",
-    "poland":           "🇵🇱", "polska":      "🇵🇱",
-    "czech":            "🇨🇿", "czechia":     "🇨🇿", "czech republic": "🇨🇿",
-    "austria":          "🇦🇹", "österreich":  "🇦🇹",
-    "switzerland":      "🇨🇭", "schweiz":     "🇨🇭",
-    "italy":            "🇮🇹", "italia":      "🇮🇹",
-    "spain":            "🇪🇸", "españa":      "🇪🇸",
-    "denmark":          "🇩🇰", "danmark":     "🇩🇰",
-    "france":           "🇫🇷",
-    "netherlands":      "🇳🇱", "holland":     "🇳🇱",
-    "belgium":          "🇧🇪",
-    "sweden":           "🇸🇪", "sverige":     "🇸🇪",
-    "norway":           "🇳🇴", "norge":       "🇳🇴",
-    "finland":          "🇫🇮",
-    "ireland":          "🇮🇪",
-    "hungary":          "🇭🇺",
-    "slovakia":         "🇸🇰",
-    "portugal":         "🇵🇹",
-    "europe":           "🌍",
+    "germany": "🇩🇪", "deutschland": "🇩🇪",
+    "poland": "🇵🇱", "polska": "🇵🇱",
+    "czech": "🇨🇿", "czechia": "🇨🇿", "czech republic": "🇨🇿",
+    "austria": "🇦🇹", "österreich": "🇦🇹",
+    "switzerland": "🇨🇭",
+    "italy": "🇮🇹",
+    "spain": "🇪🇸",
+    "denmark": "🇩🇰",
+    "france": "🇫🇷",
+    "netherlands": "🇳🇱",
+    "belgium": "🇧🇪",
+    "sweden": "🇸🇪",
+    "norway": "🇳🇴",
+    "finland": "🇫🇮",
+    "ireland": "🇮🇪",
+    "hungary": "🇭🇺",
+    "slovakia": "🇸🇰",
+    "portugal": "🇵🇹",
+    "uk": "🇬🇧", "united kingdom": "🇬🇧", "england": "🇬🇧",
+    "usa": "🇺🇸", "united states": "🇺🇸",
+    "canada": "🇨🇦",
+    "europe": "🌍",
 }
 
 SOURCE_LABELS = {
     "kontramarka.com": "Kontramarka",
     "bravo.vip":       "Bravo.vip",
-    "karabas.pl":      "Karabas PL",
-    "karabas.cz":      "Karabas CZ",
-    "karabas.de":      "Karabas DE",
-    "karabas.ch":      "Karabas CH",
-    "karabas.it":      "Karabas IT",
-    "karabas.es":      "Karabas ES",
-    "karabas.dk":      "Karabas DK",
+    "karabas.pl":      "Karabas 🇵🇱",
+    "karabas.cz":      "Karabas 🇨🇿",
+    "karabas.de":      "Karabas 🇩🇪",
+    "karabas.ch":      "Karabas 🇨🇭",
+    "karabas.it":      "Karabas 🇮🇹",
+    "karabas.es":      "Karabas 🇪🇸",
+    "karabas.dk":      "Karabas 🇩🇰",
     "karabas.co":      "Karabas EU",
+    "mticket.eu":      "mTicket",
+    "hilfe-ua.de":          "Hilfe-UA 🇩🇪",
+    "ukrainischeshaus.de":  "Ukr. Haus Berlin",
+    "ukrainskidom.pl":      "Ukr. Dim Warszawa",
+    "naszvybir.pl":         "Nasz Wybir 🇵🇱",
+    "ukrainci.cz":          "Ukrainci.cz",
+    "uccc.cz":              "UCCC Praha",
+    "ukrainet.eu":          "Ukrainet 🇦🇹",
+    "ticketmaster":         "Ticketmaster",
 }
 
 
@@ -51,24 +61,6 @@ def get_flag(country: str) -> str:
 
 
 def format_event_message(event: dict, source: str) -> str:
-    """
-    Форматує подію у HTML-повідомлення для Telegram.
-
-    Приклад виводу:
-    ━━━━━━━━━━━━━━━━━━━━━
-    🎵 НОВА ПОДІЯ 🇵🇱
-
-    🎤 <b>СКАЙ — 25 лет на сцене</b>
-
-    📅 10.09.2026
-    📍 Варшава, Poland
-    💶 167zł - 195zł
-
-    🔗 Купити квитки
-
-    📌 Джерело: Kontramarka
-    ━━━━━━━━━━━━━━━━━━━━━
-    """
     title   = event.get("title", "Без назви")
     date    = event.get("date", "")
     city    = event.get("city", "")
@@ -79,16 +71,15 @@ def format_event_message(event: dict, source: str) -> str:
     flag = get_flag(country)
     source_label = SOURCE_LABELS.get(source, source)
 
-    # Формуємо рядок місця
     location_parts = [p for p in [city, country] if p]
-    location = ", ".join(location_parts) if location_parts else "Уточнюйте на сайті"
+    location = ", ".join(location_parts) if location_parts else ""
 
     lines = [
-        f"━━━━━━━━━━━━━━━━━━━━━",
+        "━━━━━━━━━━━━━━━━━━━━━",
         f"🎵 <b>НОВА ПОДІЯ</b> {flag}",
-        f"",
+        "",
         f"🎤 <b>{_esc(title)}</b>",
-        f"",
+        "",
     ]
 
     if date:
@@ -101,19 +92,19 @@ def format_event_message(event: dict, source: str) -> str:
     lines.append("")
 
     if url:
-        lines.append(f'🔗 <a href="{url}">Купити квитки</a>')
+        # Змінено: "Детальніше" замість "Купити квитки"
+        lines.append(f'🔗 <a href="{url}">Детальніше про подію</a>')
 
     lines += [
         "",
         f"📌 Джерело: {source_label}",
-        f"━━━━━━━━━━━━━━━━━━━━━",
+        "━━━━━━━━━━━━━━━━━━━━━",
     ]
 
     return "\n".join(lines)
 
 
 def _esc(text: str) -> str:
-    """Екранує HTML-символи для Telegram."""
     return (
         str(text)
         .replace("&", "&amp;")
