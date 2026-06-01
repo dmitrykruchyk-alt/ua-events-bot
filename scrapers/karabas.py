@@ -1,7 +1,8 @@
 """
 Скрапер: karabas.{tld}
-Один скрапер покриває всі домени мережі KARABAS (.pl, .cz, .de, .ch, .it, .es, .dk, .co).
-Всі домени мають однакову HTML-структуру.
+Парсить тільки конкретні сторінки ПОДІЙ (не категорії).
+Фільтрує: пропускає посилання на категорії (/concerts/, /theatre/)
+та бере тільки конкретні події (/concert/slug або /event/slug).
 """
 
 import logging
@@ -14,12 +15,18 @@ log = logging.getLogger("scraper.karabas")
 KARABAS_DOMAINS = {
     "pl": "https://karabas.pl",
     "cz": "https://karabas.cz",
-    "de": "https://karabas.de",   # якщо існує
+    "de": "https://karabas.de",
     "ch": "https://karabas.ch",
     "it": "https://karabas.it",
     "es": "https://karabas.es",
     "dk": "https://karabas.dk",
     "co": "https://karabas.co",
+}
+
+COUNTRY_MAP = {
+    "pl": "Poland", "cz": "Czech Republic", "ch": "Switzerland",
+    "it": "Italy",  "es": "Spain",          "dk": "Denmark",
+    "de": "Germany","co": "Europe",
 }
 
 HEADERS = {
@@ -31,105 +38,153 @@ HEADERS = {
     "Accept-Language": "uk,en;q=0.9",
 }
 
+# Паттерни URL конкретних подій (не категорій)
+EVENT_URL_PATTERNS = [
+    r"/[a-z]{2}/[^/]+-tickets-[a-z0-9]+/?$",  # /es/dzidzio-tickets-abc123/
+    r"/tickets/[^/]+/?$",                        # /tickets/event-slug/
+    r"/event/[^/]+/?$",                          # /event/slug/
+    r"/[a-z0-9-]+-\d{4,}/?$",                   # /dzidzio-concert-123456/
+]
+
+# Паттерни URL які треба ПРОПУСКАТИ (категорії, службові)
+SKIP_URL_PATTERNS = [
+    r"^/concerts/?$",
+    r"^/concerts/[a-z]+/?$",   # /concerts/pop/, /concerts/rock/
+    r"^/theatre/?",
+    r"^/cinema/?",
+    r"^/sports/?",
+    r"^/kids/?",
+    r"^/[a-z]{2}/concerts/?$",
+    r"^/[a-z]{2}/?$",          # просто /es/ або /pl/
+    r"/page/\d+",
+    r"/tag/",
+    r"/category/",
+    r"/search",
+    r"\?",
+    r"#",
+]
+
+# Слова-сигнали що це категорія, не подія
+CATEGORY_TITLES = {
+    "concerts", "conciertos", "konzerte", "koncerty", "koncerti",
+    "theatre", "theater", "teatro", "teatr",
+    "tickets", "entradas", "bilety", "karten",
+    "all events", "voir tout", "see all",
+}
+
 
 def scrape_karabas(tld: str = "pl") -> list[dict]:
-    """
-    Парсить karabas.{tld} і повертає список подій.
-    tld: 'pl', 'cz', 'ch', 'it', 'es', 'dk', 'co'
-    """
     base_url = KARABAS_DOMAINS.get(tld)
     if not base_url:
         log.error(f"Невідомий домен karabas: {tld}")
         return []
 
+    country = COUNTRY_MAP.get(tld, "Europe")
     events = []
 
-    # Karabas зазвичай має сторінку /concerts або головну з афішею
-    for path in ["", "/concerts", "/concerts/", "/uk", "/uk/concerts"]:
+    # Пробуємо різні URL головних сторінок
+    for path in ["", "/concerts", "/en/concerts", "/uk/concerts"]:
         url = base_url + path
         try:
             resp = requests.get(url, headers=HEADERS, timeout=20)
-            if resp.status_code == 200:
-                events = _parse_karabas_page(resp.text, base_url, tld)
-                if events:
+            if resp.status_code == 200 and len(resp.text) > 1000:
+                parsed = _parse_page(resp.text, base_url, country, tld)
+                if parsed:
+                    events.extend(parsed)
                     break
         except Exception as e:
             log.debug(f"karabas.{tld}{path}: {e}")
 
-    log.info(f"karabas.{tld}: зібрано {len(events)} подій")
-    return events
+    # Дедублікація по URL
+    seen = set()
+    unique = []
+    for e in events:
+        if e["url"] not in seen:
+            seen.add(e["url"])
+            unique.append(e)
+
+    log.info(f"karabas.{tld}: {len(unique)} подій")
+    return unique
 
 
-def _parse_karabas_page(html: str, base_url: str, tld: str) -> list[dict]:
+def _should_skip_url(href: str) -> bool:
+    """Повертає True якщо URL — це категорія або службова сторінка."""
+    for pattern in SKIP_URL_PATTERNS:
+        if re.search(pattern, href):
+            return True
+    return False
+
+
+def _is_event_url(href: str) -> bool:
+    """Повертає True якщо URL схожий на конкретну подію."""
+    for pattern in EVENT_URL_PATTERNS:
+        if re.search(pattern, href):
+            return True
+    # Якщо в URL є числовий ID — швидше за все це подія
+    if re.search(r"-\d{5,}", href):
+        return True
+    return False
+
+
+def _parse_page(html: str, base_url: str, country: str, tld: str) -> list[dict]:
     soup = BeautifulSoup(html, "html.parser")
     events = []
-    seen = set()
+    seen_hrefs = set()
 
-    # Шукаємо посилання на події (karabas використовує /event/slug або /concerts/slug)
-    selectors = [
-        "a[href*='/event/']",
-        "a[href*='/concerts/']",
-        "a[href*='/show/']",
-        ".event-card a",
-        ".concert-item a",
-        "article a",
-    ]
-
-    links = []
-    for sel in selectors:
-        found = soup.select(sel)
-        if found:
-            links.extend(found)
-            break
-
-    # Fallback: всі посилання що схожі на події
-    if not links:
-        links = soup.find_all("a", href=re.compile(r"/(event|concert|show|ticket)/"))
-
-    for link in links:
-        href = link.get("href", "")
-        if not href or href in seen:
+    for link in soup.find_all("a", href=True):
+        href = link.get("href", "").strip()
+        if not href:
             continue
-        seen.add(href)
 
+        # Нормалізуємо URL
         if href.startswith("/"):
-            href = base_url + href
-        elif not href.startswith("http"):
+            full_url = base_url + href
+        elif href.startswith("http"):
+            # Беремо тільки посилання на той самий домен
+            if base_url.split("//")[1].split("/")[0] not in href:
+                continue
+            full_url = href
+        else:
             continue
 
-        # Пропускаємо службові сторінки
-        if any(x in href for x in ["/category/", "/tag/", "/page/", "?", "#"]):
+        if full_url in seen_hrefs:
             continue
 
+        # Пропускаємо категорії
+        if _should_skip_url(href):
+            continue
+
+        # Беремо тільки конкретні події
+        if not _is_event_url(href):
+            continue
+
+        seen_hrefs.add(full_url)
+
+        # Текст картки
         text = link.get_text(separator="\n", strip=True)
         lines = [l.strip() for l in text.splitlines() if l.strip()]
+
         if not lines:
             continue
 
         title = lines[0]
-        if len(title) < 3:
+
+        # Пропускаємо якщо назва — це категорія
+        if title.lower() in CATEGORY_TITLES or len(title) < 4:
             continue
 
-        date_str = ""
-        city = ""
-        price = ""
+        # Пропускаємо занадто короткі або технічні назви
+        if re.match(r"^\d+$", title) or title.lower() in ("more", "buy", "details"):
+            continue
 
+        date_str = city = price = ""
         for line in lines[1:]:
             if re.search(r"\d{1,2}[./]\d{2}[./]\d{2,4}", line) and not date_str:
                 date_str = line.strip()
             if re.search(r"[€$£]|zł|Kč|CHF|kr\b|PLN", line):
                 price = line.strip()
-            # Місто — рядок без цифр і не занадто довгий
-            if not city and len(line) < 40 and not re.search(r"\d", line):
+            if not city and len(line) < 40 and not re.search(r"\d{4}", line):
                 city = line.strip()
-
-        # Країна по домену
-        country_map = {
-            "pl": "Poland", "cz": "Czech Republic", "ch": "Switzerland",
-            "it": "Italy",  "es": "Spain",          "dk": "Denmark",
-            "de": "Germany","co": "Europe",
-        }
-        country = country_map.get(tld, "Europe")
 
         events.append({
             "title":   title,
@@ -137,7 +192,7 @@ def _parse_karabas_page(html: str, base_url: str, tld: str) -> list[dict]:
             "city":    city,
             "country": country,
             "price":   price,
-            "url":     href,
+            "url":     full_url,
             "source":  f"karabas.{tld}",
         })
 
