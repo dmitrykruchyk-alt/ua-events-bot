@@ -1,59 +1,19 @@
 """
-Фільтр подій:
-1. Географічний — дозволені країни (Європа + UK + USA + Canada)
-2. AI-фільтр через Claude API — визначає чи артист український
+Фільтр подій — тільки українські артисти в дозволених країнах.
+
+Логіка:
+1. Безпечні джерела (укр. культурні центри) → одразу пропускаємо
+2. Виключені країни (Туреччина, РФ...) → блокуємо
+3. Загальні джерела (mticket, ticketmaster) → AI-перевірка через Claude
 """
 
 import os
-import re
 import logging
 import requests
 
 log = logging.getLogger("ua_filter")
 
-# ── Дозволені країни ──────────────────────────────────────────
-ALLOWED_COUNTRIES = {
-    # Пріоритетні
-    "germany", "deutschland", "de",
-    "poland", "polska", "pl",
-    "czech", "czechia", "czech republic", "cz",
-    "austria", "österreich", "at",
-    # Інша Європа
-    "switzerland", "ch",
-    "italy", "it",
-    "spain", "es",
-    "denmark", "dk",
-    "france", "fr",
-    "netherlands", "nl",
-    "belgium", "be",
-    "sweden", "se",
-    "norway", "no",
-    "finland", "fi",
-    "ireland", "ie",
-    "hungary", "hu",
-    "slovakia", "sk",
-    "portugal", "pt",
-    "europe", "eu",
-    # Додані
-    "uk", "united kingdom", "england", "britain",
-    "usa", "united states", "us", "america",
-    "canada", "канада",
-}
-
-# ── Виключені країни ──────────────────────────────────────────
-EXCLUDED_COUNTRIES = {
-    "turkey", "türkiye", "istanbul", "туреччина",
-    "russia", "россия",
-    "belarus", "беларусь",
-    "georgia", "tbilisi",
-    "azerbaijan", "baku",
-    "israel", "tel aviv",
-    "armenia",
-    "montenegro",
-    "serbia",
-}
-
-# ── Безпечні джерела (вже відфільтровані) ────────────────────
+# ── Безпечні джерела — вже відфільтровані ────────────────────
 SAFE_SOURCES = {
     "kontramarka.com", "bravo.vip",
     "karabas.pl", "karabas.cz", "karabas.de",
@@ -64,20 +24,51 @@ SAFE_SOURCES = {
     "naszvybir.pl",
 }
 
-# ── Claude API для визначення артиста ────────────────────────
+# ── Дозволені країни ──────────────────────────────────────────
+ALLOWED_COUNTRIES = {
+    # Пріоритет
+    "germany", "deutschland",
+    "poland", "polska",
+    "czech", "czechia", "czech republic",
+    "austria", "österreich",
+    # Решта Європи
+    "switzerland", "italy", "spain", "denmark",
+    "france", "netherlands", "belgium", "sweden",
+    "norway", "finland", "ireland", "hungary",
+    "slovakia", "portugal", "europe", "eu",
+    # Англомовні
+    "uk", "united kingdom", "england", "britain", "scotland",
+    "usa", "united states", "america",
+    "canada",
+}
+
+# ── Виключені країни ──────────────────────────────────────────
+EXCLUDED_COUNTRIES = {
+    "turkey", "türkiye", "istanbul", "ankara",
+    "russia", "россия",
+    "belarus", "беларусь",
+    "georgia", "tbilisi",
+    "azerbaijan", "baku",
+    "israel", "tel aviv",
+    "armenia", "montenegro", "serbia",
+}
+
+# Claude API key
 ANTHROPIC_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 
-def _is_ukrainian_artist_ai(title: str) -> bool:
+
+def _ai_is_ukrainian(title: str) -> bool:
     """
-    Запитує Claude API: чи є артист в назві події українським?
-    Повертає True якщо так, False якщо ні або невідомо.
+    Запитує Claude Haiku: чи є артист в назві події українським?
+    Дешево (~$0.0001 за запит) і точно.
     """
     if not ANTHROPIC_KEY:
-        log.warning("ANTHROPIC_API_KEY не встановлено — AI-фільтр вимкнено")
-        return True  # без ключа — пропускаємо все
+        # Без ключа — пропускаємо все щоб нічого не загубити
+        log.debug("ANTHROPIC_API_KEY не встановлено — пропускаємо AI перевірку")
+        return True
 
     try:
-        response = requests.post(
+        resp = requests.post(
             "https://api.anthropic.com/v1/messages",
             headers={
                 "x-api-key": ANTHROPIC_KEY,
@@ -86,55 +77,58 @@ def _is_ukrainian_artist_ai(title: str) -> bool:
             },
             json={
                 "model": "claude-haiku-4-5-20251001",
-                "max_tokens": 10,
+                "max_tokens": 5,
+                "system": (
+                    "You are a music expert. Answer only YES or NO. "
+                    "YES = the main performer is Ukrainian. "
+                    "NO = not Ukrainian or unknown."
+                ),
                 "messages": [{
                     "role": "user",
-                    "content": (
-                        f"Is the performer in this event title a Ukrainian artist? "
-                        f"Event: '{title}'. "
-                        f"Answer only YES or NO."
-                    )
+                    "content": f"Is the main performer Ukrainian? Event: '{title}'"
                 }]
             },
-            timeout=10,
+            timeout=8,
         )
-        if response.status_code == 200:
-            answer = response.json()["content"][0]["text"].strip().upper()
-            log.info(f"  🤖 AI фільтр '{title[:40]}': {answer}")
+        if resp.status_code == 200:
+            answer = resp.json()["content"][0]["text"].strip().upper()
+            log.info(f"  🤖 '{title[:45]}' → {answer}")
             return answer.startswith("YES")
-    except Exception as e:
-        log.warning(f"AI фільтр помилка: {e}")
+        else:
+            log.warning(f"  AI API помилка {resp.status_code}")
+            return True  # якщо API недоступний — пропускаємо
 
-    return False  # якщо помилка — краще пропустити
+    except Exception as e:
+        log.warning(f"  AI помилка: {e}")
+        return True  # якщо timeout — пропускаємо
 
 
 def is_ukrainian_event(event: dict) -> bool:
     """
-    Повна перевірка події:
-    1. Безпечне джерело → одразу True
-    2. Виключена країна → False
-    3. Дозволена країна → перевіряємо через AI
+    Повна перевірка події.
     """
-    source  = (event.get("source", "") or "").lower()
-    country = (event.get("country", "") or "").lower()
-    city    = (event.get("city", "") or "").lower()
-    title   = (event.get("title", "") or "")
+    source  = (event.get("source", "") or "").lower().strip()
+    country = (event.get("country", "") or "").lower().strip()
+    city    = (event.get("city", "") or "").lower().strip()
+    title   = (event.get("title", "") or "").strip()
+    geo     = f"{country} {city}"
 
-    # 1. Безпечне джерело
+    # 1. Безпечне джерело — одразу OK
     if source in SAFE_SOURCES:
         return True
 
-    # 2. Виключена країна
+    # 2. Виключена країна — блокуємо
     for excl in EXCLUDED_COUNTRIES:
-        if excl in country or excl in city:
-            log.info(f"  🚫 Виключена країна '{country or city}': {title[:40]}")
+        if excl in geo:
+            log.info(f"  🚫 '{excl}' в '{geo}' → блок: {title[:40]}")
             return False
 
-    # 3. Перевірити що країна дозволена
-    country_ok = any(c in country or c in city for c in ALLOWED_COUNTRIES)
-    if not country_ok and (country or city):
-        log.info(f"  🚫 Країна не в списку '{country or city}': {title[:40]}")
-        return False
+    # 3. Перевіряємо що країна взагалі дозволена
+    if geo.strip():
+        country_ok = any(c in geo for c in ALLOWED_COUNTRIES)
+        if not country_ok:
+            log.info(f"  🚫 Країна не в списку '{geo}' → блок: {title[:40]}")
+            return False
 
     # 4. AI-перевірка артиста
-    return _is_ukrainian_artist_ai(title)
+    return _ai_is_ukrainian(title)
