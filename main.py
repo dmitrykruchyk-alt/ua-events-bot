@@ -1,12 +1,14 @@
 """
-UA Events Bot v2.2
-- Видалено visitukraine.today
-- AI-фільтр через Claude API для всіх загальних джерел
+UA Events Bot v2.3
+- Додано мінімальний HTTP сервер для Fly.io / Render
+- Фоновий планувальник працює паралельно
 """
 
 import asyncio
 import logging
 import os
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from telegram import Bot
 from telegram.constants import ParseMode
@@ -30,14 +32,12 @@ log = logging.getLogger("main")
 BOT_TOKEN   = os.environ["BOT_TOKEN"]
 CHANNEL_ID  = os.environ["CHANNEL_ID"]
 CHECK_HOURS = int(os.getenv("CHECK_HOURS", "6"))
+PORT        = int(os.getenv("PORT", "8080"))
 
 SCRAPERS = [
-    # ── Квиткові платформи (тільки укр. артисти) ──────────────
     ("kontramarka.com",     scrape_kontramarka),
     ("bravo.vip",           scrape_bravo_vip),
     ("mticket.eu",          lambda: scrape_generic("mticket.eu")),
-
-    # ── KARABAS мережа (тільки укр. артисти) ──────────────────
     ("karabas.pl",          lambda: scrape_karabas("pl")),
     ("karabas.cz",          lambda: scrape_karabas("cz")),
     ("karabas.de",          lambda: scrape_karabas("de")),
@@ -46,8 +46,6 @@ SCRAPERS = [
     ("karabas.es",          lambda: scrape_karabas("es")),
     ("karabas.dk",          lambda: scrape_karabas("dk")),
     ("karabas.co",          lambda: scrape_karabas("co")),
-
-    # ── Культурні центри діаспори (безпечні) ──────────────────
     ("hilfe-ua.de",         lambda: scrape_generic("hilfe-ua.de")),
     ("ukrainischeshaus.de", lambda: scrape_generic("ukrainischeshaus.de")),
     ("ukrainskidom.pl",     lambda: scrape_generic("ukrainskidom.pl")),
@@ -55,10 +53,6 @@ SCRAPERS = [
     ("ukrainci.cz",         lambda: scrape_generic("ukrainci.cz")),
     ("uccc.cz",             lambda: scrape_generic("uccc.cz")),
     ("ukrainet.eu",         lambda: scrape_generic("ukrainet.eu")),
-
-    # visitukraine.today — ВИДАЛЕНО (нерелевантний контент)
-
-    # ── API ───────────────────────────────────────────────────
     ("ticketmaster",        scrape_ticketmaster),
 ]
 
@@ -66,6 +60,24 @@ storage = Storage(os.getenv("DB_PATH", "events.db"))
 bot     = Bot(token=BOT_TOKEN)
 
 
+# ── Мінімальний HTTP сервер (для Fly.io / Render) ─────────────
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"UA Events Bot is running")
+
+    def log_message(self, format, *args):
+        pass  # вимкнути логи HTTP запитів
+
+
+def start_http_server():
+    server = HTTPServer(("0.0.0.0", PORT), HealthHandler)
+    log.info(f"HTTP health server запущено на порту {PORT}")
+    server.serve_forever()
+
+
+# ── Скрапери ──────────────────────────────────────────────────
 async def run_all_scrapers():
     log.info(f"▶ Перевірка {len(SCRAPERS)} джерел...")
     new_total = 0
@@ -77,22 +89,18 @@ async def run_all_scrapers():
             log.info(f"  [{source_name}] знайдено: {len(events)}")
 
             for event in events:
-                # 1. Фільтр RU-контенту
                 if is_russian_content(event):
                     log.warning(f"  ⛔ RU: {event.get('title','?')[:50]}")
                     continue
 
-                # 2. Фільтр — тільки українські події
                 if not is_ukrainian_event(event):
                     log.info(f"  ⏭ Не укр.: {event.get('title','?')[:50]}")
                     continue
 
-                # 3. Дедублікація
                 event_id = storage.make_id(event)
                 if storage.exists(event_id):
                     continue
 
-                # 4. Зберегти і надіслати
                 storage.save(event_id, event)
                 await send_notification(event, source_name)
                 new_total += 1
@@ -119,10 +127,14 @@ async def send_notification(event: dict, source: str):
 
 
 async def main():
-    log.info("🤖 UA Events Bot v2.2")
+    log.info("🤖 UA Events Bot v2.3")
     log.info(f"   Канал:    {CHANNEL_ID}")
     log.info(f"   Джерел:   {len(SCRAPERS)}")
     log.info(f"   Інтервал: кожні {CHECK_HOURS} год.")
+
+    # Запускаємо HTTP сервер в окремому потоці
+    http_thread = threading.Thread(target=start_http_server, daemon=True)
+    http_thread.start()
 
     await run_all_scrapers()
 
