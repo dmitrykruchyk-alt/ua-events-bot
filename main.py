@@ -1,8 +1,7 @@
 """
-UA Events Bot v2.4
-- Тільки квиткові платформи + KARABAS
-- Прибрано жорсткий AI-фільтр
-- Залишено тільки RU-фільтр (blocklist)
+UA Events Bot v2.5
+- Прибрано Playwright (kontramarka) — занадто важкий для 256MB
+- Залишено тільки легкі BS4-скрапери
 """
 
 import asyncio
@@ -14,7 +13,6 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from telegram import Bot
 from telegram.constants import ParseMode
 
-from scrapers.kontramarka import scrape_kontramarka
 from scrapers.bravo_vip import scrape_bravo_vip
 from scrapers.karabas import scrape_karabas
 from scrapers.generic_bs4 import scrape_generic
@@ -34,8 +32,7 @@ CHECK_HOURS = int(os.getenv("CHECK_HOURS", "6"))
 PORT        = int(os.getenv("PORT", "8080"))
 
 SCRAPERS = [
-    # ── Квиткові платформи ────────────────────────────────────
-    ("kontramarka.com",  scrape_kontramarka),
+    # ── Квиткові платформи (легкі BS4) ───────────────────────
     ("bravo.vip",        scrape_bravo_vip),
     ("mticket.eu",       lambda: scrape_generic("mticket.eu")),
 
@@ -48,6 +45,8 @@ SCRAPERS = [
     ("karabas.es",       lambda: scrape_karabas("es")),
     ("karabas.dk",       lambda: scrape_karabas("dk")),
     ("karabas.co",       lambda: scrape_karabas("co")),
+
+    # kontramarka.com — ВИМКНЕНО (потребує Playwright/256MB недостатньо)
 ]
 
 storage = Storage(os.getenv("DB_PATH", "events.db"))
@@ -114,7 +113,7 @@ async def send_notification(event: dict, source: str):
 
 
 async def main():
-    log.info("🤖 UA Events Bot v2.4")
+    log.info("🤖 UA Events Bot v2.5")
     log.info(f"   Канал:    {CHANNEL_ID}")
     log.info(f"   Джерел:   {len(SCRAPERS)}")
     log.info(f"   Інтервал: кожні {CHECK_HOURS} год.")
